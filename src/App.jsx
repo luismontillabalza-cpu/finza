@@ -65,6 +65,51 @@ const allMonthKeys = (expenses, incomes) => {
   return Array.from(keys).sort().reverse();
 };
 
+// ── Cycle helpers ──────────────────────────────────────────────────────────
+const MAIN_INC_CATS = ["Sueldo","Salario","Pago principal"];
+
+const cycleLabel = (cycle) => {
+  if (!cycle) return "Sin ciclo";
+  const start = cycle.startDate;
+  const end   = cycle.endDate;
+  const fmt2  = (d) => {
+    const dt = new Date(d+"T12:00:00");
+    return `${dt.getDate()} ${months[dt.getMonth()].slice(0,3)}`;
+  };
+  return end ? `${fmt2(start)} → ${fmt2(end)}` : `${fmt2(start)} → hoy`;
+};
+
+const getActiveCycle = (cycles) =>
+  cycles.find(c => !c.endDate) || null;
+
+const getCycleForDate = (cycles, date) => {
+  for (const c of [...cycles].sort((a,b)=>new Date(b.startDate)-new Date(a.startDate))) {
+    if (date >= c.startDate && (!c.endDate || date <= c.endDate)) return c;
+  }
+  return null;
+};
+
+const expensesInCycle = (expenses, cycle) => {
+  if (!cycle) return [];
+  return expenses.filter(e =>
+    e.date >= cycle.startDate && (!cycle.endDate || e.date <= cycle.endDate)
+  );
+};
+
+const incomesInCycle = (incomes, cycle) => {
+  if (!cycle) return [];
+  return incomes.filter(i =>
+    i.date >= cycle.startDate && (!cycle.endDate || i.date <= cycle.endDate)
+  );
+};
+
+const daysBetween = (d1, d2) => {
+  const a = new Date(d1+"T12:00:00"), b = new Date(d2+"T12:00:00");
+  return Math.max(0, Math.round((b - a) / 86400000));
+};
+
+const todayStr = () => new Date().toISOString().split("T")[0];
+
 // ── Demo data ──────────────────────────────────────────────────────────────
 const DEMO_EXPENSES = [];
 const DEMO_INCOMES = [];
@@ -154,107 +199,349 @@ const NotifBanner = ({ notifs, onDismiss }) => {
 
 // ── Category Manager Modal ─────────────────────────────────────────────────
 function CatManagerModal({ cats, onClose, onSave, title }) {
-  const [list, setList] = useState(cats.map(c=>({...c})));
-  const [newName, setNewName] = useState("");
-  const [newIcon, setNewIcon] = useState("📦");
-  const ICONS = ["🍽️","🚗","🛍️","💊","💪","🏠","🎮","📦","☕","🍕","🎵","✈️",
-                 "💇","🎓","🐾","🌿","⚡","🎁","🍺","🏋️","💅","🎯","🛒","📱",
-                 "💼","💻","🤝","🚀","✨","🏦","💰","📈"];
-  const COLORS = ["#C9A84C","#E8C97A","#7AA8C4","#9B84C4","#D96B5A","#5AADA8","#C47A8A","#9A9585","#7CC47A","#C48A5A"];
-  const BG_FOR = (col) => {
-    const map = {"#C9A84C":"#26220F","#E8C97A":"#2A2510","#7AA8C4":"#182230","#9B84C4":"#201A30",
-      "#D96B5A":"#2A1612","#5AADA8":"#142624","#C47A8A":"#28161E","#9A9585":"#242722",
-      "#7CC47A":"#182218","#C48A5A":"#281808"};
-    return map[col] || "#242722";
-  };
-  const [newColor, setNewColor] = useState(COLORS[0]);
+  const [list,     setList]     = useState(cats.map(c=>({...c})));
+  const [newName,  setNewName]  = useState("");
+  const [newIcon,  setNewIcon]  = useState("📦");
+  const [newColor, setNewColor] = useState("#C9A84C");
+  const [tab,      setTab]      = useState("list"); // "list" | "new"
+  const [saved,    setSaved]    = useState(false);
+  const nameRef = useRef();
 
-  const add = () => {
-    if (!newName.trim()) return;
-    setList(p=>[...p,{name:newName.trim(),icon:newIcon,color:newColor,bg:BG_FOR(newColor)}]);
-    setNewName(""); setNewIcon("📦"); setNewColor(COLORS[0]);
+  const ICONS = [
+    "🍽️","🚗","🛍️","💊","💪","🏠","🎮","📦","☕","🍕","🎵","✈️",
+    "💇","🎓","🐾","🌿","⚡","🎁","🍺","🏋️","💅","🎯","🛒","📱",
+    "💼","💻","🤝","🚀","✨","🏦","💰","📈","🎬","🎨","🐶","🏖️",
+    "🚀","🔧","🏥","🎂","🍷","🏊","🚴","🎸","📚","🖥️","🛵","🚂",
+  ];
+  const COLORS = [
+    "#C9A84C","#E8C97A","#7AA8C4","#9B84C4","#D96B5A",
+    "#5AADA8","#C47A8A","#7CC47A","#C48A5A","#9A9585",
+    "#E88C4C","#8CB4C4","#B4C47A","#C4A87A","#4CC4A8",
+  ];
+  const BG_FOR = (col) => {
+    const r=parseInt(col.slice(1,3),16);
+    const g=parseInt(col.slice(3,5),16);
+    const b=parseInt(col.slice(5,7),16);
+    return `rgba(${r},${g},${b},0.15)`;
   };
-  const remove = (i) => setList(p=>p.filter((_,idx)=>idx!==i));
-  const save = () => { onSave(list); onClose(); };
+
+  const addCat = () => {
+    const n = newName.trim();
+    if (!n) { nameRef.current?.focus(); return; }
+    if (list.find(c=>c.name.toLowerCase()===n.toLowerCase())) return;
+    setList(p=>[...p, { name:n, icon:newIcon, color:newColor, bg:BG_FOR(newColor) }]);
+    setNewName(""); setNewIcon("📦"); setNewColor("#C9A84C");
+    setTab("list");
+    setSaved(false);
+  };
+
+  const remove = (i) => { setList(p=>p.filter((_,idx)=>idx!==i)); setSaved(false); };
+
+  const saveAll = () => {
+    onSave([...list]);
+    setSaved(true);
+    setTimeout(()=>{ onClose(); }, 600);
+  };
 
   return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.82)",
       display:"flex",alignItems:"flex-end",justifyContent:"center",
-      zIndex:1500,backdropFilter:"blur(6px)"}} onClick={onClose}>
+      zIndex:1500,backdropFilter:"blur(8px)"}}>
+      <div style={{
+        background:G.card,borderRadius:"24px 24px 0 0",padding:"20px 20px 48px",
+        width:"100%",maxWidth:480,boxShadow:"0 -8px 40px rgba(0,0,0,.6)",
+        maxHeight:"92vh",overflowY:"auto",
+        border:`1px solid ${G.border}`,borderBottom:"none",
+        animation:"slideUp .28s cubic-bezier(.4,0,.2,1)",
+      }}>
+        {/* Handle + header */}
+        <div style={{width:36,height:3,borderRadius:99,background:G.border,margin:"0 auto 18px"}}/>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <h2 style={{fontSize:17,fontWeight:700,color:G.text}}>{title}</h2>
+          <button onClick={onClose} style={{background:G.surface,border:"none",borderRadius:10,
+            width:32,height:32,cursor:"pointer",fontSize:16,color:G.textMuted,
+            display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
+        </div>
+
+        {/* Tab switcher */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:18}}>
+          {[["list","📋 Ver categorías"],["new","➕ Nueva categoría"]].map(([k,lbl])=>(
+            <button key={k} onClick={()=>setTab(k)} style={{
+              padding:"10px",borderRadius:12,border:`1px solid ${tab===k?G.gold:G.border}`,
+              background:tab===k?G.goldLight:G.surface,
+              color:tab===k?G.goldSoft:G.textSoft,
+              fontSize:13,fontWeight:600,cursor:"pointer",transition:"all .15s",
+            }}>{lbl}</button>
+          ))}
+        </div>
+
+        {/* LIST TAB */}
+        {tab==="list" && (
+          <div>
+            {list.length===0 && (
+              <p style={{textAlign:"center",color:G.textMuted,fontSize:14,padding:"20px 0"}}>
+                Sin categorías — agrega una nueva
+              </p>
+            )}
+            {list.map((cat,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:12,
+                padding:"12px 0",borderBottom:`1px solid ${G.border}`}}>
+                <div style={{width:40,height:40,borderRadius:13,background:cat.bg||BG_FOR(cat.color),
+                  display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>
+                  {cat.icon}
+                </div>
+                <span style={{flex:1,fontSize:14,fontWeight:600,color:G.text}}>{cat.name}</span>
+                <div style={{width:14,height:14,borderRadius:"50%",background:cat.color,flexShrink:0}}/>
+                <button onClick={()=>remove(i)} style={{
+                  background:G.dangerDark,border:"none",borderRadius:8,
+                  width:30,height:30,cursor:"pointer",fontSize:15,color:G.danger,
+                  display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,
+                }}>×</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* NEW CATEGORY TAB */}
+        {tab==="new" && (
+          <div>
+            {/* Name input */}
+            <p style={{fontSize:11,color:G.textMuted,fontWeight:700,letterSpacing:1,marginBottom:6}}>
+              NOMBRE DE LA CATEGORÍA
+            </p>
+            <input
+              ref={nameRef}
+              value={newName}
+              onChange={e=>setNewName(e.target.value)}
+              onKeyDown={e=>e.key==="Enter" && addCat()}
+              placeholder="Ej: Mascota, Gasolina, Farmacia…"
+              style={{width:"100%",padding:"13px 14px",borderRadius:13,
+                border:`1.5px solid ${newName?G.gold:G.border}`,
+                background:G.surface,color:G.text,fontSize:15,outline:"none",
+                marginBottom:16,boxSizing:"border-box",transition:"border-color .15s"}}
+            />
+
+            {/* Preview */}
+            {newName.trim() && (
+              <div style={{display:"flex",alignItems:"center",gap:12,
+                background:G.goldLight,borderRadius:14,padding:"12px 16px",
+                marginBottom:16,border:`1px solid ${G.gold}33`}}>
+                <div style={{width:40,height:40,borderRadius:13,background:BG_FOR(newColor),
+                  display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>
+                  {newIcon}
+                </div>
+                <div>
+                  <p style={{fontSize:15,fontWeight:700,color:G.cream}}>{newName}</p>
+                  <p style={{fontSize:11,color:G.creamDim}}>Vista previa</p>
+                </div>
+              </div>
+            )}
+
+            {/* Icon picker */}
+            <p style={{fontSize:11,color:G.textMuted,fontWeight:700,letterSpacing:1,marginBottom:8}}>
+              ÍCONO
+            </p>
+            <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:16}}>
+              {ICONS.map(ico=>(
+                <button key={ico} onClick={()=>setNewIcon(ico)} style={{
+                  width:40,height:40,borderRadius:11,border:"none",cursor:"pointer",fontSize:20,
+                  background:newIcon===ico?G.goldLight:G.surface,
+                  outline:newIcon===ico?`2px solid ${G.gold}`:"2px solid transparent",
+                  outlineOffset:1,transition:"all .1s",
+                }}>{ico}</button>
+              ))}
+            </div>
+
+            {/* Color picker */}
+            <p style={{fontSize:11,color:G.textMuted,fontWeight:700,letterSpacing:1,marginBottom:8}}>
+              COLOR
+            </p>
+            <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:20}}>
+              {COLORS.map(col=>(
+                <button key={col} onClick={()=>setNewColor(col)} style={{
+                  width:32,height:32,borderRadius:"50%",border:"none",cursor:"pointer",
+                  background:col,flexShrink:0,
+                  outline:newColor===col?`2.5px solid ${G.cream}`:"2.5px solid transparent",
+                  outlineOffset:2,transition:"outline .1s",
+                }}/>
+              ))}
+            </div>
+
+            <button
+              onClick={addCat}
+              disabled={!newName.trim()}
+              style={{
+                width:"100%",padding:14,borderRadius:14,border:"none",
+                background:newName.trim()
+                  ?`linear-gradient(135deg,${G.gold},${G.goldSoft})`
+                  :G.surface,
+                color:newName.trim()?G.bg:G.textMuted,
+                fontSize:15,fontWeight:700,cursor:newName.trim()?"pointer":"default",
+                transition:"all .15s",marginBottom:8,
+              }}>
+              ➕ Agregar categoría
+            </button>
+            <p style={{fontSize:12,color:G.textMuted,textAlign:"center"}}>
+              Después guarda los cambios abajo
+            </p>
+          </div>
+        )}
+
+        {/* Save button — always visible */}
+        <div style={{marginTop:20}}>
+          <button onClick={saveAll} style={{
+            width:"100%",padding:15,borderRadius:14,border:"none",
+            background:saved
+              ?G.tealDark
+              :`linear-gradient(135deg,${G.gold},${G.goldSoft})`,
+            color:saved?G.teal:G.bg,
+            fontSize:16,fontWeight:700,cursor:"pointer",
+            border:saved?`1px solid ${G.teal}44`:"none",
+            transition:"all .2s",
+          }}>
+            {saved ? "✅ Guardado" : `Guardar ${list.length} categoría${list.length!==1?"s":""}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ── Expense Detail Modal ───────────────────────────────────────────────────
+function ExpenseDetailModal({ expense, expCats, onClose, onEdit, onDelete }) {
+  const cat = expCats.find(c=>c.name===expense.category)||{icon:"📦",color:G.gold,bg:G.goldLight};
+  const [confirmDel, setConfirmDel] = useState(false);
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.8)",
+      display:"flex",alignItems:"flex-end",justifyContent:"center",
+      zIndex:1000,backdropFilter:"blur(6px)"}} onClick={onClose}>
       <div onClick={e=>e.stopPropagation()} style={{
-        background:G.card,borderRadius:"24px 24px 0 0",padding:"24px 20px 44px",
+        background:G.card,borderRadius:"24px 24px 0 0",padding:"24px 20px 48px",
         width:"100%",maxWidth:480,boxShadow:"0 -8px 40px rgba(0,0,0,.5)",
-        animation:"slideUp .3s cubic-bezier(.4,0,.2,1)",maxHeight:"88vh",overflowY:"auto",
+        animation:"slideUp .28s cubic-bezier(.4,0,.2,1)",maxHeight:"92vh",overflowY:"auto",
         border:`1px solid ${G.border}`,borderBottom:"none",
       }}>
         <div style={{width:36,height:3,borderRadius:99,background:G.border,margin:"0 auto 20px"}}/>
-        <h2 style={{fontSize:18,fontWeight:700,color:G.text,marginBottom:18}}>{title}</h2>
 
-        {/* Existing categories */}
-        <div style={{marginBottom:20}}>
-          {list.map((cat,i)=>(
-            <div key={i} style={{display:"flex",alignItems:"center",gap:10,
-              padding:"10px 0",borderBottom:`1px solid ${G.border}`}}>
-              <div style={{width:36,height:36,borderRadius:11,background:cat.bg,
-                display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>{cat.icon}</div>
-              <span style={{flex:1,fontSize:14,fontWeight:600,color:G.text}}>{cat.name}</span>
-              <div style={{width:16,height:16,borderRadius:"50%",background:cat.color,flexShrink:0}}/>
-              <button onClick={()=>remove(i)} style={{background:"none",border:"none",
-                cursor:"pointer",fontSize:18,color:G.textMuted,padding:"0 4px"}}>×</button>
-            </div>
-          ))}
+        {/* Header */}
+        <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:20}}>
+          <div style={{width:52,height:52,borderRadius:16,background:cat.bg,
+            display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,flexShrink:0}}>
+            {cat.icon}
+          </div>
+          <div style={{flex:1}}>
+            <p style={{fontSize:18,fontWeight:700,color:G.text}}>{expense.note||expense.category}</p>
+            <p style={{fontSize:13,color:G.textMuted}}>{expense.category} · {expense.date.slice(5).replace("-","/")}</p>
+          </div>
+          <p style={{fontSize:22,fontWeight:800,color:G.cream}}>-{fmt(expense.amount)}</p>
         </div>
 
-        {/* Add new */}
-        <p style={{fontSize:12,fontWeight:700,color:G.textMuted,letterSpacing:1,marginBottom:10}}>NUEVA CATEGORÍA</p>
-        <input value={newName} onChange={e=>setNewName(e.target.value)}
-          placeholder="Nombre de categoría"
-          style={{width:"100%",padding:"11px 14px",borderRadius:13,border:`1px solid ${G.border}`,
-            background:G.surface,color:G.text,fontSize:14,outline:"none",
-            marginBottom:12,boxSizing:"border-box"}}/>
-
-        {/* Icon picker */}
-        <p style={{fontSize:11,color:G.textMuted,fontWeight:600,marginBottom:8}}>ÍCONO</p>
-        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:12}}>
-          {ICONS.map(ico=>(
-            <button key={ico} onClick={()=>setNewIcon(ico)} style={{
-              width:36,height:36,borderRadius:10,border:"none",cursor:"pointer",fontSize:18,
-              background:newIcon===ico?G.goldLight:G.surface,
-              outline:newIcon===ico?`2px solid ${G.gold}`:"none",
-            }}>{ico}</button>
-          ))}
+        {/* Type badge */}
+        <div style={{display:"flex",gap:8,marginBottom:20}}>
+          <span style={{fontSize:12,fontWeight:700,padding:"4px 12px",borderRadius:99,
+            background:expense.type==="fijo"?G.blueDark:G.goldLight,
+            color:expense.type==="fijo"?G.blue:G.gold,
+            border:`1px solid ${expense.type==="fijo"?G.blue+"33":G.gold+"33"}`}}>
+            {expense.type==="fijo"?"📌 Gasto fijo":"📊 Gasto variable"}
+          </span>
         </div>
 
-        {/* Color picker */}
-        <p style={{fontSize:11,color:G.textMuted,fontWeight:600,marginBottom:8}}>COLOR</p>
-        <div style={{display:"flex",gap:8,marginBottom:16}}>
-          {COLORS.map(col=>(
-            <button key={col} onClick={()=>setNewColor(col)} style={{
-              width:28,height:28,borderRadius:"50%",border:"none",cursor:"pointer",
-              background:col,
-              outline:newColor===col?`2px solid ${G.cream}`:"2px solid transparent",
-              outlineOffset:2,
+        {/* Photo */}
+        {expense.photo ? (
+          <div style={{marginBottom:20}}>
+            <p style={{fontSize:11,color:G.textMuted,fontWeight:700,letterSpacing:1,marginBottom:8}}>BOLETA ADJUNTA</p>
+            <img src={expense.photo} alt="boleta" style={{
+              width:"100%",borderRadius:16,border:`1px solid ${G.border}`,
+              maxHeight:320,objectFit:"contain",background:G.surface,
             }}/>
-          ))}
+            <button onClick={()=>{
+              const a=document.createElement("a");
+              a.href=expense.photo;
+              a.download=`boleta_${expense.date}_${expense.category}.jpg`;
+              a.click();
+            }} style={{
+              width:"100%",marginTop:10,padding:"11px",borderRadius:12,
+              border:`1px solid ${G.gold}44`,background:G.goldLight,
+              color:G.goldSoft,fontSize:13,fontWeight:600,cursor:"pointer",
+            }}>
+              ⬇️ Descargar boleta
+            </button>
+          </div>
+        ) : (
+          <div style={{background:G.surface,borderRadius:14,padding:"16px",
+            textAlign:"center",marginBottom:20,border:`1px solid ${G.border}`}}>
+            <p style={{fontSize:13,color:G.textMuted}}>Sin boleta adjunta</p>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <button onClick={onEdit} style={{padding:13,borderRadius:13,
+            border:`1px solid ${G.border}`,background:G.surface,
+            color:G.textSoft,fontSize:14,fontWeight:600,cursor:"pointer"}}>
+            ✏️ Editar
+          </button>
+          <button onClick={()=>setConfirmDel(true)} style={{padding:13,borderRadius:13,
+            border:"none",background:G.dangerDark,
+            color:G.danger,fontSize:14,fontWeight:600,cursor:"pointer"}}>
+            🗑️ Eliminar
+          </button>
         </div>
 
-        {/* Preview + add */}
-        <div style={{display:"flex",gap:10,marginBottom:20}}>
-          <div style={{width:42,height:42,borderRadius:13,background:BG_FOR(newColor),
-            display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{newIcon}</div>
-          <input value={newName} onChange={e=>setNewName(e.target.value)}
-            placeholder="Vista previa…"
-            style={{flex:1,padding:"0 14px",borderRadius:13,border:`1px solid ${G.border}`,
-              background:G.surface,color:G.text,fontSize:14,outline:"none"}}/>
-          <button onClick={add} style={{padding:"0 16px",borderRadius:13,border:"none",
-            background:G.gold,color:G.bg,fontSize:14,fontWeight:700,cursor:"pointer"}}>+</button>
-        </div>
+        {confirmDel && <Confirm msg="¿Eliminar este gasto?"
+          onOk={()=>{onDelete(expense.id);onClose();}}
+          onCancel={()=>setConfirmDel(false)}/>}
+      </div>
+    </div>
+  );
+}
 
-        <button onClick={save} style={{width:"100%",padding:14,borderRadius:14,border:"none",
-          background:`linear-gradient(135deg,${G.gold},${G.goldSoft})`,
-          color:G.bg,fontSize:16,fontWeight:700,cursor:"pointer"}}>
-          Guardar categorías
-        </button>
+
+// ── New Cycle Prompt Modal ─────────────────────────────────────────────────
+function NewCyclePrompt({ income, onYes, onNo }) {
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.8)",
+      display:"flex",alignItems:"center",justifyContent:"center",
+      zIndex:2000,backdropFilter:"blur(8px)",padding:"0 24px"}}>
+      <div style={{background:G.card,borderRadius:24,padding:"28px 24px",
+        width:"100%",maxWidth:360,boxShadow:"0 16px 48px rgba(0,0,0,.5)",
+        border:`1px solid ${G.gold}44`,animation:"pop .2s ease"}}>
+
+        <div style={{width:52,height:52,borderRadius:18,background:G.goldLight,
+          display:"flex",alignItems:"center",justifyContent:"center",
+          fontSize:26,margin:"0 auto 16px",border:`1px solid ${G.gold}44`}}>🔄</div>
+
+        <h2 style={{fontSize:17,fontWeight:700,color:G.text,textAlign:"center",marginBottom:8}}>
+          ¿Iniciar nuevo ciclo?
+        </h2>
+        <p style={{fontSize:13,color:G.textMuted,textAlign:"center",lineHeight:1.6,marginBottom:8}}>
+          Registraste un ingreso de
+        </p>
+        <p style={{fontSize:24,fontWeight:800,color:G.gold,textAlign:"center",marginBottom:8}}>
+          {fmt(income.amount)}
+        </p>
+        <p style={{fontSize:13,color:G.textMuted,textAlign:"center",lineHeight:1.6,marginBottom:24}}>
+          ¿Deseas iniciar un nuevo ciclo financiero desde el <strong style={{color:G.cream}}>{income.date.slice(8)} de {months[parseInt(income.date.slice(5,7))-1]}</strong>?
+        </p>
+        <p style={{fontSize:12,color:G.textMuted,textAlign:"center",marginBottom:20,
+          background:G.surface,borderRadius:10,padding:"8px 12px",lineHeight:1.5}}>
+          El ciclo anterior se cerrará y todos los movimientos futuros quedarán asociados a este nuevo ciclo.
+        </p>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <button onClick={onNo} style={{padding:13,borderRadius:13,
+            border:`1px solid ${G.border}`,background:G.surface,
+            color:G.textSoft,fontSize:14,fontWeight:600,cursor:"pointer"}}>
+            No, gracias
+          </button>
+          <button onClick={onYes} style={{padding:13,borderRadius:13,border:"none",
+            background:`linear-gradient(135deg,${G.gold},${G.goldSoft})`,
+            color:G.bg,fontSize:14,fontWeight:700,cursor:"pointer"}}>
+            Sí, nuevo ciclo
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -267,10 +554,19 @@ function AddExpenseModal({ onClose, onSave, prefill, editItem, expCats }) {
   const [note,     setNote]     = useState(editItem?.note     || prefill?.note     || "");
   const [date,     setDate]     = useState(editItem?.date     || prefill?.date     || new Date().toISOString().split("T")[0]);
   const [expType,  setExpType]  = useState(editItem?.type     || prefill?.type     || "variable");
+  const [photo,    setPhoto]    = useState(editItem?.photo    || null);
+  const photoRef = useRef();
+
+  const handlePhoto = (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => setPhoto(ev.target.result);
+    reader.readAsDataURL(file);
+  };
 
   const save = () => {
     if (!amount) return;
-    onSave({...editItem, amount:parseFloat(amount), category:cat, note, date, type:expType, id:editItem?.id||Date.now()});
+    onSave({...editItem, amount:parseFloat(amount), category:cat, note, date, type:expType, photo, id:editItem?.id||Date.now()});
     onClose();
   };
 
@@ -338,6 +634,35 @@ function AddExpenseModal({ onClose, onSave, prefill, editItem, expCats }) {
         <p style={{fontSize:11,color:G.textMuted,fontWeight:700,letterSpacing:1,marginBottom:6}}>FECHA</p>
         <input type="date" value={date} onChange={e=>setDate(e.target.value)}
           style={{...inputStyle,marginBottom:24}}/>
+
+        {/* Photo upload */}
+        <p style={{fontSize:11,color:G.textMuted,fontWeight:700,letterSpacing:1,marginBottom:8}}>BOLETA / COMPROBANTE (opcional)</p>
+        {photo ? (
+          <div style={{position:"relative",marginBottom:20}}>
+            <img src={photo} alt="boleta" style={{
+              width:"100%",maxHeight:200,objectFit:"cover",
+              borderRadius:14,border:`1px solid ${G.border}`,
+            }}/>
+            <button onClick={()=>setPhoto(null)} style={{
+              position:"absolute",top:8,right:8,
+              width:28,height:28,borderRadius:"50%",
+              background:"rgba(0,0,0,.6)",border:"none",
+              color:"white",fontSize:16,cursor:"pointer",
+              display:"flex",alignItems:"center",justifyContent:"center",
+            }}>×</button>
+          </div>
+        ) : (
+          <div onClick={()=>photoRef.current.click()} style={{
+            border:`1.5px dashed ${G.gold}44`,borderRadius:14,
+            padding:"16px",textAlign:"center",cursor:"pointer",
+            background:G.goldLight,marginBottom:20,
+            display:"flex",alignItems:"center",gap:12,justifyContent:"center",
+          }}>
+            <span style={{fontSize:22}}>📷</span>
+            <span style={{fontSize:13,color:G.creamDim,fontWeight:600}}>Adjuntar foto de boleta</span>
+          </div>
+        )}
+        <input ref={photoRef} type="file" accept="image/*" style={{display:"none"}} onChange={handlePhoto}/>
 
         <button onClick={save} style={{width:"100%",padding:15,borderRadius:14,border:"none",
           background:`linear-gradient(135deg,${G.gold},${G.goldSoft})`,
@@ -588,145 +913,31 @@ function AddDebtModal({ onClose, onSave, onPayment, editItem }) {
   );
 }
 
-// ── Receipt / IA Modal ─────────────────────────────────────────────────────
-function ReceiptModal({ onClose, onResult, expCats }) {
-  const [stage,   setStage]   = useState("upload");
-  const [preview, setPreview] = useState(null);
-  const [result,  setResult]  = useState(null);
-  const fileRef = useRef();
-
-  const catNames = expCats.map(c=>c.name).join("|");
-
-  const handleFile = async (e) => {
-    const file = e.target.files[0]; if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-      setPreview(ev.target.result); setStage("analyzing");
-      try {
-        const base64 = ev.target.result.split(",")[1];
-        const res = await fetch("https://api.anthropic.com/v1/messages",{
-          method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:800,
-            messages:[{role:"user",content:[
-              {type:"image",source:{type:"base64",media_type:file.type||"image/jpeg",data:base64}},
-              {type:"text",text:`Analiza esta boleta. Solo JSON sin markdown:\n{"store":"nombre","amount":número,"date":"YYYY-MM-DD","category":"${catNames}","expenseType":"fijo o variable","confidence":0-100}\nSuscripciones/Netflix/gym/arriendo→fijo, resto→variable.`}
-            ]}]})
-        });
-        const data = await res.json();
-        const txt  = data.content?.find(b=>b.type==="text")?.text||"{}";
-        setResult(JSON.parse(txt.replace(/```json|```/g,"").trim()));
-      } catch {
-        setResult({store:"Starbucks",amount:4500,date:new Date().toISOString().split("T")[0],
-          category:"Comida",expenseType:"variable",confidence:91});
-      }
-      setStage("result");
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const confirm = () => {
-    const cat = expCats.find(c=>c.name===result.category)||expCats[0];
-    onResult({amount:result.amount, category:cat.name,
-      note:result.store, date:result.date||new Date().toISOString().split("T")[0],
-      type:result.expenseType});
-    onClose();
-  };
-
-  return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",
-      display:"flex",alignItems:"flex-end",justifyContent:"center",
-      zIndex:1000,backdropFilter:"blur(5px)"}} onClick={onClose}>
-      <div onClick={e=>e.stopPropagation()} style={{
-        background:G.card,borderRadius:"24px 24px 0 0",padding:"24px 20px 48px",
-        width:"100%",maxWidth:480,boxShadow:"0 -8px 40px rgba(0,0,0,.5)",
-        animation:"slideUp .28s",border:`1px solid ${G.border}`,borderBottom:"none",
-      }}>
-        <div style={{width:36,height:3,borderRadius:99,background:G.border,margin:"0 auto 20px"}}/>
-        <h2 style={{fontSize:18,fontWeight:700,color:G.text,marginBottom:6}}>📸 Subir boleta</h2>
-        <p style={{fontSize:13,color:G.textMuted,marginBottom:22}}>La IA detecta monto, tienda y categoría automáticamente.</p>
-
-        {stage==="upload" && (
-          <>
-            <div onClick={()=>fileRef.current.click()} style={{
-              border:`1.5px dashed ${G.gold}44`,borderRadius:18,padding:"44px 20px",
-              textAlign:"center",cursor:"pointer",background:G.goldLight,transition:"background .15s",
-            }}>
-              <div style={{fontSize:44,marginBottom:10}}>📄</div>
-              <p style={{color:G.goldSoft,fontWeight:600,fontSize:15}}>Toca para subir foto</p>
-              <p style={{color:G.textMuted,fontSize:13,marginTop:4}}>JPG, PNG · máx 10 MB</p>
-            </div>
-            <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={handleFile}/>
-          </>
-        )}
-
-        {stage==="analyzing" && (
-          <div style={{textAlign:"center",padding:"36px 0"}}>
-            {preview&&<img src={preview} alt="" style={{width:90,height:90,objectFit:"cover",borderRadius:14,marginBottom:18}}/>}
-            <div style={{fontSize:32,marginBottom:10}}>🔍</div>
-            <p style={{color:G.goldSoft,fontWeight:600,fontSize:16}}>Analizando boleta…</p>
-            <p style={{color:G.textMuted,fontSize:13}}>La IA está leyendo el ticket</p>
-          </div>
-        )}
-
-        {stage==="result" && result && (
-          <>
-            <div style={{background:G.goldLight,borderRadius:18,padding:18,marginBottom:18,
-              border:`1px solid ${G.gold}33`}}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:14}}>
-                <div>
-                  <p style={{fontSize:11,color:G.textMuted,fontWeight:600}}>TIENDA</p>
-                  <p style={{fontSize:20,fontWeight:700,color:G.text}}>{result.store}</p>
-                </div>
-                <div style={{background:G.goldMid,color:G.goldSoft,borderRadius:10,
-                  padding:"3px 10px",fontSize:12,fontWeight:700,alignSelf:"flex-start"}}>
-                  {result.confidence}%
-                </div>
-              </div>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12}}>
-                <div><p style={{fontSize:11,color:G.textMuted,fontWeight:600}}>MONTO</p>
-                  <p style={{fontSize:17,fontWeight:700,color:G.gold}}>{fmt(result.amount)}</p></div>
-                <div><p style={{fontSize:11,color:G.textMuted,fontWeight:600}}>CATEGORÍA</p>
-                  <p style={{fontSize:13,fontWeight:700,color:G.text}}>
-                    {expCats.find(c=>c.name===result.category)?.icon} {result.category}
-                  </p></div>
-                <div><p style={{fontSize:11,color:G.textMuted,fontWeight:600}}>TIPO</p>
-                  <p style={{fontSize:13,fontWeight:700,color:result.expenseType==="fijo"?G.blue:G.gold}}>
-                    {result.expenseType==="fijo"?"📌 Fijo":"📊 Variable"}
-                  </p></div>
-              </div>
-            </div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-              <button onClick={onClose} style={{padding:14,borderRadius:13,
-                border:`1px solid ${G.border}`,background:G.surface,
-                color:G.textSoft,fontSize:14,fontWeight:600,cursor:"pointer"}}>Cancelar</button>
-              <button onClick={confirm} style={{padding:14,borderRadius:13,border:"none",
-                background:`linear-gradient(135deg,${G.gold},${G.goldSoft})`,
-                color:G.bg,fontSize:14,fontWeight:700,cursor:"pointer"}}>Confirmar ✓</button>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 // ── SCREENS ────────────────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════
 
-function HomeScreen({ expenses, incomes, fixedExpenses, debts, notifs, onDismiss,
-  onAddExpense, onUploadReceipt, expCats }) {
+function HomeScreen({ expenses, incomes, fixedExpenses, debts, cycles, notifs, onDismiss,
+  onAddExpense, expCats, onGoScreen }) {
   const now   = new Date();
-  const mk    = nowKey();
-  const mInc  = incomes.filter(i=>i.date.startsWith(mk));
-  const mExp  = expenses.filter(e=>e.date.startsWith(mk));
-  const totalInc  = mInc.reduce((s,i)=>s+i.amount,0);
-  const totalExp  = mExp.reduce((s,e)=>s+e.amount,0);
+  const today = todayStr();
+  const cycle = getActiveCycle(cycles);
+
+  const cExp  = cycle ? expensesInCycle(expenses, cycle) : [];
+  const cInc  = cycle ? incomesInCycle(incomes, cycle)   : [];
+  const totalInc  = cInc.reduce((s,i)=>s+i.amount, 0);
+  const totalExp  = cExp.reduce((s,e)=>s+e.amount, 0);
+  const totalFixed= fixedExpenses.filter(f=>f.active).reduce((s,f)=>s+f.amount,0);
   const available = totalInc - totalExp;
+  const savings   = totalInc - totalExp - totalFixed;
   const pct = totalInc ? Math.round((totalExp/totalInc)*100) : 0;
 
+  // Days info
+  const daysIn  = cycle ? daysBetween(cycle.startDate, today) + 1 : 0;
+  const avgDaily= daysIn > 0 ? Math.round(totalExp / daysIn) : 0;
+
   const byCat = {};
-  mExp.forEach(e=>{byCat[e.category]=(byCat[e.category]||0)+e.amount;});
+  cExp.forEach(e=>{ byCat[e.category]=(byCat[e.category]||0)+e.amount; });
   const topCats = Object.entries(byCat).sort((a,b)=>b[1]-a[1]).slice(0,4);
   const maxCat  = topCats[0]?.[1]||1;
   const recent  = [...expenses].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,4);
@@ -743,7 +954,7 @@ function HomeScreen({ expenses, incomes, fixedExpenses, debts, notifs, onDismiss
               <span style={{fontSize:22,fontWeight:800,color:G.gold,letterSpacing:"-0.5px"}}>a</span>
             </div>
             <p style={{fontSize:11,color:G.textMuted,fontWeight:500,letterSpacing:"0.4px",marginTop:-2}}>
-              {months[now.getMonth()]} {now.getFullYear()}
+              {cycle ? cycleLabel(cycle) : months[now.getMonth()]+" "+now.getFullYear()}
             </p>
           </div>
         </div>
@@ -765,12 +976,9 @@ function HomeScreen({ expenses, incomes, fixedExpenses, debts, notifs, onDismiss
         boxShadow:"0 8px 32px rgba(0,0,0,.4)",
         border:`1px solid ${G.gold}33`,position:"relative",overflow:"hidden",
       }}>
-        <div style={{position:"absolute",top:-24,right:-24,width:100,height:100,
-          borderRadius:"50%",background:`${G.gold}09`}}/>
-        <div style={{position:"absolute",bottom:-16,left:32,width:64,height:64,
-          borderRadius:"50%",background:`${G.gold}06`}}/>
+        <div style={{position:"absolute",top:-24,right:-24,width:100,height:100,borderRadius:"50%",background:`${G.gold}09`}}/>
         <p style={{fontSize:12,color:G.creamDim,fontWeight:600,letterSpacing:"0.8px",marginBottom:4}}>DISPONIBLE</p>
-        <p style={{fontSize:40,fontWeight:800,color:G.cream,letterSpacing:"-1px",marginBottom:4}}>
+        <p style={{fontSize:40,fontWeight:800,color:available>=0?G.cream:G.danger,letterSpacing:"-1px",marginBottom:4}}>
           {totalInc>0 ? fmt(available) : "—"}
         </p>
         {totalInc>0 && (
@@ -780,49 +988,73 @@ function HomeScreen({ expenses, incomes, fixedExpenses, debts, notifs, onDismiss
               width:`${Math.min(pct,100)}%`,transition:"width 1.2s"}}/>
           </div>
         )}
-        <div style={{display:"flex",gap:28}}>
-          <div>
-            <p style={{fontSize:11,color:G.creamDim,fontWeight:600,letterSpacing:"0.6px"}}>INGRESOS</p>
-            <p style={{fontSize:17,fontWeight:700,color:G.cream}}>{fmt(totalInc)}</p>
-          </div>
-          <div>
-            <p style={{fontSize:11,color:G.creamDim,fontWeight:600,letterSpacing:"0.6px"}}>GASTADO</p>
-            <p style={{fontSize:17,fontWeight:700,color:G.cream}}>{fmt(totalExp)}</p>
-          </div>
-          {totalInc>0 && <div>
-            <p style={{fontSize:11,color:G.creamDim,fontWeight:600,letterSpacing:"0.6px"}}>USADO</p>
-            <p style={{fontSize:17,fontWeight:700,color:pct>80?G.danger:G.gold}}>{pct}%</p>
-          </div>}
+        <div style={{display:"flex",gap:24,flexWrap:"wrap"}}>
+          <div><p style={{fontSize:11,color:G.creamDim,fontWeight:600,letterSpacing:"0.6px"}}>INGRESOS</p>
+            <p style={{fontSize:16,fontWeight:700,color:G.cream}}>{fmt(totalInc)}</p></div>
+          <div><p style={{fontSize:11,color:G.creamDim,fontWeight:600,letterSpacing:"0.6px"}}>GASTADO</p>
+            <p style={{fontSize:16,fontWeight:700,color:G.cream}}>{fmt(totalExp)}</p></div>
+          {totalInc>0&&<div><p style={{fontSize:11,color:G.creamDim,fontWeight:600,letterSpacing:"0.6px"}}>USADO</p>
+            <p style={{fontSize:16,fontWeight:700,color:pct>80?G.danger:G.gold}}>{pct}%</p></div>}
         </div>
-        {!totalInc && <p style={{fontSize:13,color:G.creamDim,marginTop:8}}>
-          Registra tus ingresos para comenzar 👆
+        {!cycle && <p style={{fontSize:13,color:G.creamDim,marginTop:8}}>
+          Registra un ingreso para iniciar tu primer ciclo 👆
         </p>}
       </div>
+
+      {/* Cycle info card */}
+      {cycle && (
+        <Card style={{marginBottom:14,background:G.surface,border:`1px solid ${G.border}`}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <p style={{fontSize:12,color:G.gold,fontWeight:700,letterSpacing:"0.8px"}}>CICLO ACTUAL</p>
+            <span style={{fontSize:11,color:G.textMuted,fontWeight:600,
+              background:G.goldLight,padding:"2px 8px",borderRadius:99,border:`1px solid ${G.gold}33`}}>
+              Día {daysIn}
+            </span>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:12}}>
+            <div style={{background:G.card,borderRadius:13,padding:"10px 12px",textAlign:"center"}}>
+              <p style={{fontSize:10,color:G.textMuted,fontWeight:600,marginBottom:3}}>AHORRO EST.</p>
+              <p style={{fontSize:14,fontWeight:700,color:savings>=0?G.gold:G.danger}}>{fmt(Math.max(savings,0))}</p>
+            </div>
+            <div style={{background:G.card,borderRadius:13,padding:"10px 12px",textAlign:"center"}}>
+              <p style={{fontSize:10,color:G.textMuted,fontWeight:600,marginBottom:3}}>PROM/DÍA</p>
+              <p style={{fontSize:14,fontWeight:700,color:G.cream}}>{fmt(avgDaily)}</p>
+            </div>
+            <div style={{background:G.card,borderRadius:13,padding:"10px 12px",textAlign:"center"}}>
+              <p style={{fontSize:10,color:G.textMuted,fontWeight:600,marginBottom:3}}>GASTOS FIJOS</p>
+              <p style={{fontSize:14,fontWeight:700,color:G.cream}}>{fmt(totalFixed)}</p>
+            </div>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <p style={{fontSize:12,color:G.textMuted}}>Inicio: <span style={{color:G.cream,fontWeight:600}}>{cycle.startDate.slice(8)} de {months[parseInt(cycle.startDate.slice(5,7))-1]}</span></p>
+            <button onClick={()=>onGoScreen("cycles")} style={{background:"none",border:"none",
+              cursor:"pointer",fontSize:12,color:G.gold,fontWeight:600}}>Ver historial →</button>
+          </div>
+        </Card>
+      )}
 
       {/* Quick actions */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
         <button onClick={onAddExpense} style={{
           background:G.goldLight,border:`1px solid ${G.gold}44`,borderRadius:18,
           padding:"18px 16px",color:G.goldSoft,fontSize:14,fontWeight:700,
-          cursor:"pointer",textAlign:"left",transition:"background .15s",
+          cursor:"pointer",textAlign:"left",
         }}>
-          <div style={{fontSize:26,marginBottom:6}}>➕</div>
-          Agregar gasto
+          <div style={{fontSize:26,marginBottom:6}}>➕</div>Agregar gasto
         </button>
-        <button onClick={onUploadReceipt} style={{
+        <button onClick={()=>onGoScreen("expenses")} style={{
           background:G.surface,border:`1px solid ${G.border}`,borderRadius:18,
           padding:"18px 16px",color:G.creamDim,fontSize:14,fontWeight:700,
           cursor:"pointer",textAlign:"left",
         }}>
-          <div style={{fontSize:26,marginBottom:6}}>📸</div>
-          Subir boleta
+          <div style={{fontSize:26,marginBottom:6}}>📋</div>Ver gastos
         </button>
       </div>
 
       {/* Top categories */}
       {topCats.length>0 && (
         <Card style={{marginBottom:14}}>
-          <p style={{fontSize:13,fontWeight:700,color:G.text,marginBottom:16}}>Top categorías</p>
+          <p style={{fontSize:13,fontWeight:700,color:G.text,marginBottom:16}}>Top categorías del ciclo</p>
           {topCats.map(([catName,total])=>{
             const cat=expCats.find(c=>c.name===catName)||{icon:"📦",color:G.gold,bg:G.goldLight};
             return (
@@ -862,17 +1094,19 @@ function HomeScreen({ expenses, incomes, fixedExpenses, debts, notifs, onDismiss
         </Card>
       )}
 
-      {!totalInc && expenses.length===0 && (
+      {!cycle && expenses.length===0 && (
         <div style={{textAlign:"center",padding:"48px 0"}}>
           <div style={{fontSize:56,marginBottom:14}}>🌙</div>
           <p style={{fontSize:18,fontWeight:700,color:G.text,marginBottom:8}}>Bienvenido a Finza</p>
-          <p style={{fontSize:14,color:G.textMuted}}>Registra ingresos y gastos para empezar.</p>
+          <p style={{fontSize:14,color:G.textMuted,lineHeight:1.6}}>
+            Registra tu primer ingreso en la sección<br/>
+            <strong style={{color:G.gold}}>Ingresos</strong> para iniciar tu ciclo financiero.
+          </p>
         </div>
       )}
     </div>
   );
 }
-
 function IncomesScreen({ incomes, incCats, onAdd, onEdit, onDelete, onManageCats }) {
   const now = new Date();
   const mk  = nowKey();
@@ -973,6 +1207,7 @@ function ExpensesScreen({ expenses, expCats, onAdd, onEdit, onDelete, onManageCa
   const [editItem,   setEditItem]   = useState(null);
   const [confirmId,  setConfirmId]  = useState(null);
   const [showCatMgr, setShowCatMgr] = useState(false);
+  const [detailItem, setDetailItem] = useState(null);
 
   const filtered = filter==="Todos" ? expenses : expenses.filter(e=>e.category===filter);
   const sorted   = [...filtered].sort((a,b)=>new Date(b.date)-new Date(a.date));
@@ -1021,10 +1256,14 @@ function ExpensesScreen({ expenses, expCats, onAdd, onEdit, onDelete, onManageCa
         sorted.map(e=>{
           const cat=expCats.find(c=>c.name===e.category)||{icon:"📦",bg:G.goldLight};
           return (
-            <Card key={e.id} style={{marginBottom:10,padding:16}}>
+            <Card key={e.id} style={{marginBottom:10,padding:16,cursor:"pointer"}}
+              onClick={()=>setDetailItem(e)}>
               <div style={{display:"flex",alignItems:"center",gap:12}}>
                 <div style={{width:44,height:44,borderRadius:14,background:cat.bg,
-                  display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{cat.icon}</div>
+                  display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>
+                  {cat.icon}
+                  {e.photo && <span style={{position:"absolute",bottom:0,right:0,fontSize:10}}>📎</span>}
+                </div>
                 <div style={{flex:1}}>
                   <p style={{fontSize:14,fontWeight:600,color:G.text}}>{e.note||e.category}</p>
                   <div style={{display:"flex",gap:7,alignItems:"center",marginTop:2}}>
@@ -1034,17 +1273,10 @@ function ExpensesScreen({ expenses, expCats, onAdd, onEdit, onDelete, onManageCa
                       color:e.type==="fijo"?G.blue:G.gold}}>
                       {e.type==="fijo"?"fijo":"variable"}
                     </span>
+                    {e.photo&&<span style={{fontSize:10,color:G.gold}}>📎</span>}
                   </div>
                 </div>
-                <div style={{textAlign:"right"}}>
-                  <p style={{fontSize:15,fontWeight:700,color:G.text}}>-{fmt(e.amount)}</p>
-                  <div style={{display:"flex",gap:8,marginTop:2,justifyContent:"flex-end"}}>
-                    <button onClick={()=>{setEditItem(e);setShowAdd(true);}} style={{
-                      background:"none",border:"none",cursor:"pointer",fontSize:11,color:G.blue,fontWeight:600}}>Editar</button>
-                    <button onClick={()=>setConfirmId(e.id)} style={{
-                      background:"none",border:"none",cursor:"pointer",fontSize:11,color:G.danger,fontWeight:600}}>Eliminar</button>
-                  </div>
-                </div>
+                <p style={{fontSize:15,fontWeight:700,color:G.text}}>-{fmt(e.amount)}</p>
               </div>
             </Card>
           );
@@ -1056,6 +1288,10 @@ function ExpensesScreen({ expenses, expCats, onAdd, onEdit, onDelete, onManageCa
         onOk={()=>{onDelete(confirmId);setConfirmId(null);}} onCancel={()=>setConfirmId(null)}/>}
       {showCatMgr&&<CatManagerModal cats={expCats} title="Categorías de gastos"
         onClose={()=>setShowCatMgr(false)} onSave={onManageCats}/>}
+      {detailItem&&<ExpenseDetailModal expense={detailItem} expCats={expCats}
+        onClose={()=>setDetailItem(null)}
+        onEdit={()=>{setEditItem(detailItem);setDetailItem(null);setShowAdd(true);}}
+        onDelete={(id)=>{onDelete(id);setDetailItem(null);}}/>}
     </div>
   );
 }
@@ -1134,7 +1370,7 @@ function FixedScreen({ fixedExpenses, onAdd, onEdit, onDelete, onToggle }) {
 
       {fixedExpenses.length===0&&(
         <div style={{textAlign:"center",padding:"48px 0"}}>
-          <p style={{fontSize:42,marginBottom:12}}>📌</p>
+          <p style={{fontSize:42,marginBottom:12}}>💳</p>
           <p style={{fontSize:15,color:G.textMuted}}>Sin gastos fijos registrados</p>
         </div>
       )}
@@ -1332,288 +1568,376 @@ function CalendarScreen({ expenses, expCats }) {
   );
 }
 
-function StatsScreen({ expenses, incomes, expCats }) {
-  const now=new Date();
-  const mk=nowKey();
-  const mKeys=[-3,-2,-1,0].map(d=>{const dt=new Date(now.getFullYear(),now.getMonth()+d,1);
-    return`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}`;});
-  const mTotals=mKeys.map(k=>({
-    key:k,label:months[parseInt(k.split("-")[1])-1].slice(0,3),
-    exp:expenses.filter(e=>e.date.startsWith(k)).reduce((s,e)=>s+e.amount,0),
-    inc:incomes.filter(i=>i.date.startsWith(k)).reduce((s,i)=>s+i.amount,0),
-  }));
-  const cExp=expenses.filter(e=>e.date.startsWith(mk));
+
+// ── Donut Chart ────────────────────────────────────────────────────────────
+function DonutChart({ data, total }) {
+  const size = 200;
+  const cx = size / 2, cy = size / 2;
+  const outerR = 80, innerR = 52;
+  let cumAngle = -Math.PI / 2;
+
+  const slices = data.map(({ value, color }) => {
+    const angle = (value / total) * 2 * Math.PI;
+    const x1 = cx + outerR * Math.cos(cumAngle);
+    const y1 = cy + outerR * Math.sin(cumAngle);
+    cumAngle += angle;
+    const x2 = cx + outerR * Math.cos(cumAngle);
+    const y2 = cy + outerR * Math.sin(cumAngle);
+    const ix1 = cx + innerR * Math.cos(cumAngle);
+    const iy1 = cy + innerR * Math.sin(cumAngle);
+    const prevAngle = cumAngle - angle;
+    const ix2 = cx + innerR * Math.cos(prevAngle);
+    const iy2 = cy + innerR * Math.sin(prevAngle);
+    const large = angle > Math.PI ? 1 : 0;
+    return { color, d: `M ${x1} ${y1} A ${outerR} ${outerR} 0 ${large} 1 ${x2} ${y2} L ${ix1} ${iy1} A ${innerR} ${innerR} 0 ${large} 0 ${ix2} ${iy2} Z` };
+  });
+
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      {slices.map((s, i) => (
+        <path key={i} d={s.d} fill={s.color} stroke={G.card} strokeWidth={2}/>
+      ))}
+      <circle cx={cx} cy={cy} r={innerR - 2} fill={G.card}/>
+      <text x={cx} y={cy - 8} textAnchor="middle" fill={G.cream} fontSize="13" fontWeight="700" fontFamily="DM Sans, sans-serif">Total</text>
+      <text x={cx} y={cy + 10} textAnchor="middle" fill={G.gold} fontSize="13" fontWeight="800" fontFamily="DM Sans, sans-serif">{fmt(total).replace("$","$")}</text>
+    </svg>
+  );
+}
+
+function StatsScreen({ expenses, incomes, expCats, cycles, fixed }) {
+  const today  = todayStr();
+  const cycle  = getActiveCycle(cycles);
+  const prevCycle = cycles.filter(c=>c.endDate).sort((a,b)=>new Date(b.startDate)-new Date(a.startDate))[0]||null;
+
+  const cExp   = cycle ? expensesInCycle(expenses, cycle) : [];
+  const cInc   = cycle ? incomesInCycle(incomes, cycle)   : [];
+  const pExp   = prevCycle ? expensesInCycle(expenses, prevCycle) : [];
+  const pInc   = prevCycle ? incomesInCycle(incomes, prevCycle)   : [];
+
+  const totalExp  = cExp.reduce((s,e)=>s+e.amount,0);
+  const totalInc  = cInc.reduce((s,i)=>s+i.amount,0);
+  const totalFixed= fixed.filter(f=>f.active).reduce((s,f)=>s+f.amount,0);
+  const savings   = Math.max(totalInc - totalExp - totalFixed, 0);
+  const available = totalInc - totalExp;
+
+  const prevExp   = pExp.reduce((s,e)=>s+e.amount,0);
+  const prevInc   = pInc.reduce((s,i)=>s+i.amount,0);
+
   const byCat={};cExp.forEach(e=>{byCat[e.category]=(byCat[e.category]||0)+e.amount;});
   const sCats=Object.entries(byCat).sort((a,b)=>b[1]-a[1]);
-  const total=cExp.reduce((s,e)=>s+e.amount,0);
-  const maxM=Math.max(...mTotals.map(m=>Math.max(m.exp,m.inc)),1);
-  const weeks=[0,1,2,3].map(w=>{const s=w*7+1,e=Math.min((w+1)*7,31);
-    return{label:`S${w+1}`,t:cExp.filter(x=>{const d=parseInt(x.date.split("-")[2]);return d>=s&&d<=e;})
-      .reduce((s,x)=>s+x.amount,0)};});
-  const maxW=Math.max(...weeks.map(w=>w.t),1);
   const topCat=sCats[0];
+
+  const daysIn = cycle ? daysBetween(cycle.startDate, today)+1 : 0;
+  const pct = totalInc ? Math.round((totalExp/totalInc)*100) : 0;
 
   return (
     <div style={{padding:"0 16px 100px"}}>
       <div style={{padding:"20px 0 14px"}}>
         <h1 style={{fontSize:24,fontWeight:800,color:G.text}}>Estadísticas</h1>
-        <p style={{fontSize:13,color:G.textMuted}}>Resumen financiero visual</p>
+        <p style={{fontSize:13,color:G.textMuted}}>{cycle?cycleLabel(cycle):"Sin ciclo activo"}</p>
       </div>
 
-      <Card style={{marginBottom:14}}>
-        <p style={{fontSize:13,fontWeight:700,color:G.text,marginBottom:18}}>Ingresos vs Gastos</p>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,alignItems:"flex-end",height:110,marginBottom:10}}>
-          {mTotals.map((m,i)=>{
-            const hE=m.exp?Math.max((m.exp/maxM)*100,5):3;
-            const hI=m.inc?Math.max((m.inc/maxM)*100,5):3;
-            const isNow=i===3;
-            return (
-              <div key={m.key} style={{display:"flex",gap:4,alignItems:"flex-end",height:"100%",justifyContent:"center"}}>
-                <div style={{width:13,borderRadius:"4px 4px 0 0",height:`${hI}%`,
-                  background:isNow?G.gold:`${G.gold}33`,transition:"height 1s"}}/>
-                <div style={{width:13,borderRadius:"4px 4px 0 0",height:`${hE}%`,
-                  background:isNow?G.blue:`${G.blue}33`,transition:"height 1s"}}/>
-              </div>
-            );
-          })}
+      {!cycle && (
+        <div style={{textAlign:"center",padding:"48px 0"}}>
+          <p style={{fontSize:42,marginBottom:12}}>📊</p>
+          <p style={{fontSize:15,color:G.textMuted}}>Sin ciclo activo aún</p>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:10}}>
-          {mTotals.map((m,i)=>(<p key={m.key} style={{textAlign:"center",fontSize:11,
-            fontWeight:600,color:i===3?G.cream:G.textMuted}}>{m.label}</p>))}
-        </div>
-        <div style={{display:"flex",gap:16,justifyContent:"center"}}>
-          <div style={{display:"flex",alignItems:"center",gap:6}}>
-            <div style={{width:10,height:10,borderRadius:3,background:G.gold}}/>
-            <span style={{fontSize:11,color:G.textMuted}}>Ingresos</span>
-          </div>
-          <div style={{display:"flex",alignItems:"center",gap:6}}>
-            <div style={{width:10,height:10,borderRadius:3,background:G.blue}}/>
-            <span style={{fontSize:11,color:G.textMuted}}>Gastos</span>
-          </div>
-        </div>
-      </Card>
-
-      <Card style={{marginBottom:14}}>
-        <p style={{fontSize:13,fontWeight:700,color:G.text,marginBottom:18}}>Semanal · {months[now.getMonth()]}</p>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,alignItems:"flex-end",height:72,marginBottom:10}}>
-          {weeks.map((w,i)=>{const h=w.t?Math.max((w.t/maxW)*100,5):3;return(
-            <div key={i} style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",height:"100%"}}>
-              <p style={{fontSize:9,fontWeight:700,color:G.creamDim,marginBottom:3}}>{w.t?`${Math.round(w.t/1000)}k`:"—"}</p>
-              <div style={{width:"80%",borderRadius:"5px 5px 0 0",
-                background:`linear-gradient(180deg,${G.gold},${G.goldSoft})`,
-                height:`${h}%`,opacity:0.4+(i*0.2)}}/>
-            </div>
-          );})}
-        </div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
-          {weeks.map((w,i)=>(<p key={i} style={{textAlign:"center",fontSize:11,fontWeight:600,color:G.textMuted}}>{w.label}</p>))}
-        </div>
-      </Card>
-
-      {sCats.length>0&&(
-        <Card style={{marginBottom:14}}>
-          <p style={{fontSize:13,fontWeight:700,color:G.text,marginBottom:16}}>Por categoría</p>
-          {sCats.map(([catName,amt])=>{
-            const cat=expCats.find(c=>c.name===catName)||{icon:"📦",color:G.gold};
-            return (
-              <div key={catName} style={{marginBottom:13}}>
-                <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
-                  <span style={{fontSize:13,fontWeight:600,color:G.text}}>{cat.icon} {catName}</span>
-                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                    <span style={{fontSize:11,color:G.textMuted}}>{total?Math.round((amt/total)*100):0}%</span>
-                    <span style={{fontSize:13,fontWeight:700,color:G.text}}>{fmt(amt)}</span>
-                  </div>
-                </div>
-                <AnimBar pct={total?(amt/total)*100:0} color={cat.color}/>
-              </div>
-            );
-          })}
-        </Card>
       )}
 
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-        <Card style={{background:G.goldLight,border:`1px solid ${G.gold}33`}}>
-          <p style={{fontSize:11,color:G.creamDim,fontWeight:600,marginBottom:4}}>MÁS GASTADO</p>
-          <p style={{fontSize:26,marginBottom:4}}>{topCat?expCats.find(c=>c.name===topCat[0])?.icon:"—"}</p>
-          <p style={{fontSize:14,fontWeight:700,color:G.cream}}>{topCat?.[0]||"—"}</p>
+      {cycle && (<>
+        {/* Summary row */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:14}}>
+          <Card style={{background:G.goldLight,border:`1px solid ${G.gold}33`}}>
+            <p style={{fontSize:11,color:G.creamDim,fontWeight:600,marginBottom:4}}>INGRESOS</p>
+            <p style={{fontSize:22,fontWeight:800,color:G.gold}}>{fmt(totalInc)}</p>
+          </Card>
+          <Card style={{background:available>=0?G.surface:G.dangerDark,border:`1px solid ${available>=0?G.border:G.danger+"33"}`}}>
+            <p style={{fontSize:11,color:G.textMuted,fontWeight:600,marginBottom:4}}>DISPONIBLE</p>
+            <p style={{fontSize:22,fontWeight:800,color:available>=0?G.cream:G.danger}}>{fmt(available)}</p>
+          </Card>
+          <Card style={{background:G.surface,border:`1px solid ${G.border}`}}>
+            <p style={{fontSize:11,color:G.textMuted,fontWeight:600,marginBottom:4}}>GASTADO</p>
+            <p style={{fontSize:22,fontWeight:800,color:G.cream}}>{fmt(totalExp)}</p>
+            <p style={{fontSize:11,color:G.textMuted,marginTop:2}}>{pct}% del ingreso</p>
+          </Card>
+          <Card style={{background:savings>0?G.tealDark:G.surface,border:`1px solid ${savings>0?G.teal+"33":G.border}`}}>
+            <p style={{fontSize:11,color:G.textMuted,fontWeight:600,marginBottom:4}}>AHORRO EST.</p>
+            <p style={{fontSize:22,fontWeight:800,color:savings>0?G.teal:G.textMuted}}>{fmt(savings)}</p>
+          </Card>
+        </div>
+
+        {/* Progress bar */}
+        <Card style={{marginBottom:14}}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+            <p style={{fontSize:13,fontWeight:700,color:G.text}}>Dinero utilizado</p>
+            <p style={{fontSize:13,fontWeight:700,color:pct>80?G.danger:G.gold}}>{pct}%</p>
+          </div>
+          <AnimBar pct={pct} color={pct>80?G.danger:G.gold} h={10}/>
+          <div style={{display:"flex",justifyContent:"space-between",marginTop:8}}>
+            <p style={{fontSize:11,color:G.textMuted}}>Día {daysIn} del ciclo</p>
+            <p style={{fontSize:11,color:G.textMuted}}>Prom. {fmt(daysIn>0?Math.round(totalExp/daysIn):0)}/día</p>
+          </div>
         </Card>
-        <Card style={{background:G.blueDark,border:`1px solid ${G.blue}33`}}>
-          <p style={{fontSize:11,color:G.textSoft,fontWeight:600,marginBottom:4}}>ESTE MES</p>
-          <p style={{fontSize:20,fontWeight:800,color:G.blue,marginBottom:2}}>{fmt(total)}</p>
-          <p style={{fontSize:11,color:G.textMuted}}>{cExp.length} gastos</p>
-        </Card>
-      </div>
+
+        {/* Donut */}
+        {sCats.length>0 && totalExp>0 && (
+          <Card style={{marginBottom:14}}>
+            <p style={{fontSize:13,fontWeight:700,color:G.text,marginBottom:16}}>Distribución por categoría</p>
+            <div style={{display:"flex",alignItems:"center",gap:16}}>
+              <DonutChart
+                data={sCats.slice(0,6).map(([name,amt])=>({
+                  value:amt,
+                  color:expCats.find(c=>c.name===name)?.color||G.gold,
+                }))}
+                total={totalExp}
+              />
+              <div style={{flex:1}}>
+                {sCats.slice(0,5).map(([catName,amt])=>{
+                  const cat=expCats.find(c=>c.name===catName)||{icon:"📦",color:G.gold};
+                  return (
+                    <div key={catName} style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                      <div style={{width:10,height:10,borderRadius:3,background:cat.color,flexShrink:0}}/>
+                      <div style={{flex:1}}>
+                        <p style={{fontSize:12,fontWeight:600,color:G.text}}>{cat.icon} {catName}</p>
+                        <p style={{fontSize:11,color:G.textMuted}}>{totalExp?Math.round((amt/totalExp)*100):0}%</p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </Card>
+        )}
+
+        {/* Comparison with previous cycle */}
+        {prevCycle && (
+          <Card style={{marginBottom:14}}>
+            <p style={{fontSize:13,fontWeight:700,color:G.text,marginBottom:14}}>
+              Comparación con ciclo anterior
+            </p>
+            <p style={{fontSize:11,color:G.textMuted,marginBottom:12}}>{cycleLabel(prevCycle)}</p>
+            {[
+              ["Ingresos",  totalInc, prevInc, G.gold],
+              ["Gastos",    totalExp, prevExp, G.danger],
+            ].map(([label,cur,prev,col])=>{
+              const diff = cur - prev;
+              return (
+                <div key={label} style={{marginBottom:14}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+                    <span style={{fontSize:13,fontWeight:600,color:G.text}}>{label}</span>
+                    <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                      <span style={{fontSize:11,color:diff>=0?G.teal:G.danger,fontWeight:600}}>
+                        {diff>=0?"+":""}{fmt(diff)}
+                      </span>
+                      <span style={{fontSize:13,fontWeight:700,color:G.cream}}>{fmt(cur)}</span>
+                    </div>
+                  </div>
+                  <AnimBar pct={prev>0?(cur/prev)*100:0} color={col} h={6}/>
+                </div>
+              );
+            })}
+          </Card>
+        )}
+
+        {/* Top categories bar */}
+        {sCats.length>0 && (
+          <Card>
+            <p style={{fontSize:13,fontWeight:700,color:G.text,marginBottom:14}}>Por categoría</p>
+            {sCats.map(([catName,amt])=>{
+              const cat=expCats.find(c=>c.name===catName)||{icon:"📦",color:G.gold};
+              return (
+                <div key={catName} style={{marginBottom:13}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+                    <span style={{fontSize:13,fontWeight:600,color:G.text}}>{cat.icon} {catName}</span>
+                    <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                      <span style={{fontSize:11,color:G.textMuted}}>{totalExp?Math.round((amt/totalExp)*100):0}%</span>
+                      <span style={{fontSize:13,fontWeight:700,color:G.text}}>{fmt(amt)}</span>
+                    </div>
+                  </div>
+                  <AnimBar pct={totalExp?(amt/totalExp)*100:0} color={cat.color}/>
+                </div>
+              );
+            })}
+          </Card>
+        )}
+      </>)}
     </div>
   );
 }
+function CyclesScreen({ cycles, expenses, incomes, fixed, debts, expCats, onExport }) {
+  const [selId, setSelId] = useState(null);
+  const sorted = [...cycles].sort((a,b)=>new Date(b.startDate)-new Date(a.startDate));
+  const selCycle = sorted.find(c=>c.id===selId) || sorted[0] || null;
+  const activeCycle = getActiveCycle(cycles);
 
-
-// ═══════════════════════════════════════════════════════════════════════════
-// ── HISTORIAL MENSUAL ──────────────────────────────────────────────────────
-// ═══════════════════════════════════════════════════════════════════════════
-function HistoryScreen({ expenses, incomes, fixed, debts, expCats }) {
-  const keys = allMonthKeys(expenses, incomes);
-  const [sel, setSel] = useState(keys[1] || keys[0]); // default = last month
-
-  const mExp  = expenses.filter(e => e.date.startsWith(sel));
-  const mInc  = incomes.filter(i  => i.date.startsWith(sel));
-  const totalExp = mExp.reduce((s,e)=>s+e.amount,0);
-  const totalInc = mInc.reduce((s,i)=>s+i.amount,0);
+  const cExp = selCycle ? expensesInCycle(expenses, selCycle) : [];
+  const cInc = selCycle ? incomesInCycle(incomes,  selCycle) : [];
+  const totalExp = cExp.reduce((s,e)=>s+e.amount,0);
+  const totalInc = cInc.reduce((s,i)=>s+i.amount,0);
+  const totalFixed = fixed.filter(f=>f.active).reduce((s,f)=>s+f.amount,0);
   const balance  = totalInc - totalExp;
+  const savings  = Math.max(totalInc - totalExp - totalFixed, 0);
 
   const byCat = {};
-  mExp.forEach(e=>{ byCat[e.category]=(byCat[e.category]||0)+e.amount; });
+  cExp.forEach(e=>{ byCat[e.category]=(byCat[e.category]||0)+e.amount; });
   const catList = Object.entries(byCat).sort((a,b)=>b[1]-a[1]);
   const maxCat  = catList[0]?.[1]||1;
 
-  const activeDebts = debts.filter(d=>d.paid<d.total);
+  const daysLen = selCycle
+    ? daysBetween(selCycle.startDate, selCycle.endDate||todayStr())+1
+    : 0;
 
   return (
     <div style={{padding:"0 16px 100px"}}>
-      <div style={{padding:"20px 0 14px"}}>
-        <h1 style={{fontSize:24,fontWeight:800,color:G.text}}>Historial</h1>
-        <p style={{fontSize:13,color:G.textMuted}}>Revisa meses anteriores</p>
-      </div>
-
-      {/* Month selector */}
-      <div style={{display:"flex",gap:7,overflowX:"auto",paddingBottom:12,marginBottom:16,scrollbarWidth:"none"}}>
-        {keys.map(k=>(
-          <button key={k} onClick={()=>setSel(k)} style={{
-            padding:"7px 14px",borderRadius:99,border:`1px solid ${sel===k?G.gold:G.border}`,
-            background:sel===k?G.goldLight:G.surface,
-            color:sel===k?G.goldSoft:G.textMuted,
-            fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,
-          }}>{keyToLabel(k)}{k===nowKey()?" · actual":""}</button>
-        ))}
-      </div>
-
-      {/* Summary card */}
-      <div style={{background:"linear-gradient(135deg,#1C1A0E,#26210A)",borderRadius:20,
-        padding:"22px",marginBottom:14,border:`1px solid ${G.gold}33`}}>
-        <p style={{fontSize:12,color:G.creamDim,fontWeight:600,letterSpacing:"0.8px",marginBottom:6}}>
-          RESUMEN · {keyToLabel(sel).toUpperCase()}
-        </p>
-        <p style={{fontSize:34,fontWeight:800,color:balance>=0?G.cream:G.danger,marginBottom:14}}>
-          {balance>=0?"+":""}{fmt(balance)}
-        </p>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-          <div style={{background:"rgba(255,255,255,.04)",borderRadius:14,padding:"12px"}}>
-            <p style={{fontSize:11,color:G.creamDim,fontWeight:600,marginBottom:4}}>INGRESOS</p>
-            <p style={{fontSize:18,fontWeight:700,color:G.gold}}>{fmt(totalInc)}</p>
-            <p style={{fontSize:11,color:G.textMuted}}>{mInc.length} movimientos</p>
-          </div>
-          <div style={{background:"rgba(255,255,255,.04)",borderRadius:14,padding:"12px"}}>
-            <p style={{fontSize:11,color:G.creamDim,fontWeight:600,marginBottom:4}}>GASTOS</p>
-            <p style={{fontSize:18,fontWeight:700,color:G.danger}}>{fmt(totalExp)}</p>
-            <p style={{fontSize:11,color:G.textMuted}}>{mExp.length} movimientos</p>
-          </div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"20px 0 14px"}}>
+        <div>
+          <h1 style={{fontSize:24,fontWeight:800,color:G.text}}>Ciclos</h1>
+          <p style={{fontSize:13,color:G.textMuted}}>Historial financiero</p>
         </div>
+        {selCycle && (
+          <button onClick={()=>onExport(selCycle)} style={{
+            background:G.goldLight,border:`1px solid ${G.gold}44`,
+            borderRadius:12,padding:"9px 14px",color:G.goldSoft,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+            ⬇️ Exportar
+          </button>
+        )}
       </div>
 
-      {/* Categories */}
-      {catList.length>0 && (
-        <Card style={{marginBottom:14}}>
-          <p style={{fontSize:13,fontWeight:700,color:G.text,marginBottom:14}}>Gastos por categoría</p>
-          {catList.map(([catName,amt])=>{
-            const cat=expCats.find(c=>c.name===catName)||{icon:"📦",color:G.gold};
-            return (
-              <div key={catName} style={{marginBottom:12}}>
-                <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
-                  <span style={{fontSize:13,fontWeight:600,color:G.text}}>{cat.icon} {catName}</span>
-                  <span style={{fontSize:13,fontWeight:600,color:G.textSoft}}>{fmt(amt)}</span>
-                </div>
-                <AnimBar pct={(amt/maxCat)*100} color={cat.color}/>
-              </div>
-            );
-          })}
-        </Card>
-      )}
-
-      {/* Incomes list */}
-      {mInc.length>0 && (
-        <Card style={{marginBottom:14}}>
-          <p style={{fontSize:13,fontWeight:700,color:G.text,marginBottom:14}}>Ingresos</p>
-          {[...mInc].sort((a,b)=>new Date(b.date)-new Date(a.date)).map((inc,i)=>(
-            <div key={inc.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
-              paddingBottom:i<mInc.length-1?11:0,marginBottom:i<mInc.length-1?11:0,
-              borderBottom:i<mInc.length-1?`1px solid ${G.border}`:"none"}}>
-              <div>
-                <p style={{fontSize:13,fontWeight:600,color:G.text}}>{inc.description||inc.category}</p>
-                <p style={{fontSize:11,color:G.textMuted}}>{inc.category} · {inc.date.slice(5).replace("-","/")}</p>
-              </div>
-              <p style={{fontSize:14,fontWeight:700,color:G.gold}}>+{fmt(inc.amount)}</p>
-            </div>
-          ))}
-        </Card>
-      )}
-
-      {/* Expenses list */}
-      {mExp.length>0 && (
-        <Card style={{marginBottom:14}}>
-          <p style={{fontSize:13,fontWeight:700,color:G.text,marginBottom:14}}>Gastos</p>
-          {[...mExp].sort((a,b)=>new Date(b.date)-new Date(a.date)).map((e,i)=>{
-            const cat=expCats.find(c=>c.name===e.category)||{icon:"📦"};
-            return (
-              <div key={e.id} style={{display:"flex",alignItems:"center",gap:10,
-                paddingBottom:i<mExp.length-1?11:0,marginBottom:i<mExp.length-1?11:0,
-                borderBottom:i<mExp.length-1?`1px solid ${G.border}`:"none"}}>
-                <span style={{fontSize:18,flexShrink:0}}>{cat.icon}</span>
-                <div style={{flex:1}}>
-                  <p style={{fontSize:13,fontWeight:600,color:G.text}}>{e.note||e.category}</p>
-                  <p style={{fontSize:11,color:G.textMuted}}>{e.category} · {e.date.slice(5).replace("-","/")}</p>
-                </div>
-                <p style={{fontSize:13,fontWeight:700,color:G.text}}>-{fmt(e.amount)}</p>
-              </div>
-            );
-          })}
-        </Card>
-      )}
-
-      {/* Active debts snapshot */}
-      {activeDebts.length>0 && (
-        <Card>
-          <p style={{fontSize:13,fontWeight:700,color:G.text,marginBottom:14}}>Deudas activas</p>
-          {activeDebts.map((d,i)=>{
-            const pct=Math.round((d.paid/d.total)*100);
-            return (
-              <div key={d.id} style={{marginBottom:i<activeDebts.length-1?14:0}}>
-                <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
-                  <span style={{fontSize:13,fontWeight:600,color:G.text}}>{d.name}</span>
-                  <span style={{fontSize:13,fontWeight:700,color:G.danger}}>{fmt(d.total-d.paid)}</span>
-                </div>
-                <AnimBar pct={pct} color={d.color||G.danger} h={5}/>
-              </div>
-            );
-          })}
-        </Card>
-      )}
-
-      {mExp.length===0 && mInc.length===0 && (
+      {cycles.length===0 ? (
         <div style={{textAlign:"center",padding:"48px 0"}}>
-          <p style={{fontSize:42,marginBottom:12}}>📂</p>
-          <p style={{fontSize:15,color:G.textMuted}}>Sin datos para {keyToLabel(sel)}</p>
+          <p style={{fontSize:42,marginBottom:12}}>🔄</p>
+          <p style={{fontSize:15,color:G.textMuted}}>Aún no tienes ciclos registrados</p>
         </div>
-      )}
+      ) : (<>
+        {/* Cycle selector */}
+        <div style={{display:"flex",gap:7,overflowX:"auto",paddingBottom:12,marginBottom:16,scrollbarWidth:"none"}}>
+          {sorted.map(c=>(
+            <button key={c.id} onClick={()=>setSelId(c.id)} style={{
+              padding:"7px 14px",borderRadius:99,
+              border:`1px solid ${(selCycle?.id===c.id)?G.gold:G.border}`,
+              background:(selCycle?.id===c.id)?G.goldLight:G.surface,
+              color:(selCycle?.id===c.id)?G.goldSoft:G.textMuted,
+              fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,
+            }}>
+              {c.endDate?"":"🟢 "}{cycleLabel(c)}
+            </button>
+          ))}
+        </div>
+
+        {selCycle && (<>
+          {/* Cycle header */}
+          <div style={{background:"linear-gradient(135deg,#1C1A0E,#26210A)",borderRadius:20,
+            padding:"22px",marginBottom:14,border:`1px solid ${G.gold}33`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+              <div>
+                <p style={{fontSize:11,color:G.creamDim,fontWeight:600,letterSpacing:"0.8px",marginBottom:4}}>
+                  {!selCycle.endDate?"CICLO ACTIVO":"CICLO CERRADO"}
+                </p>
+                <p style={{fontSize:13,color:G.cream,fontWeight:600}}>{cycleLabel(selCycle)}</p>
+                <p style={{fontSize:11,color:G.textMuted,marginTop:2}}>{daysLen} días</p>
+              </div>
+              <p style={{fontSize:30,fontWeight:800,color:balance>=0?G.gold:G.danger}}>{fmt(balance)}</p>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+              {[
+                ["Ingresos",  fmt(totalInc), G.gold],
+                ["Gastos",    fmt(totalExp), G.danger],
+                ["Ahorro",    fmt(savings),  G.teal],
+              ].map(([label,val,col])=>(
+                <div key={label} style={{background:"rgba(255,255,255,.04)",borderRadius:11,padding:"10px 8px",textAlign:"center"}}>
+                  <p style={{fontSize:10,color:G.creamDim,fontWeight:600,marginBottom:3}}>{label.toUpperCase()}</p>
+                  <p style={{fontSize:14,fontWeight:700,color:col}}>{val}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Categories */}
+          {catList.length>0 && (
+            <Card style={{marginBottom:14}}>
+              <p style={{fontSize:13,fontWeight:700,color:G.text,marginBottom:14}}>Gastos por categoría</p>
+              {catList.map(([catName,amt])=>{
+                const cat=expCats.find(c=>c.name===catName)||{icon:"📦",color:G.gold};
+                return (
+                  <div key={catName} style={{marginBottom:12}}>
+                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+                      <span style={{fontSize:13,fontWeight:600,color:G.text}}>{cat.icon} {catName}</span>
+                      <span style={{fontSize:13,fontWeight:600,color:G.textSoft}}>{fmt(amt)}</span>
+                    </div>
+                    <AnimBar pct={(amt/maxCat)*100} color={cat.color}/>
+                  </div>
+                );
+              })}
+            </Card>
+          )}
+
+          {/* Incomes */}
+          {cInc.length>0 && (
+            <Card style={{marginBottom:14}}>
+              <p style={{fontSize:13,fontWeight:700,color:G.text,marginBottom:14}}>Ingresos</p>
+              {[...cInc].sort((a,b)=>new Date(b.date)-new Date(a.date)).map((inc,i)=>(
+                <div key={inc.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                  paddingBottom:i<cInc.length-1?11:0,marginBottom:i<cInc.length-1?11:0,
+                  borderBottom:i<cInc.length-1?`1px solid ${G.border}`:"none"}}>
+                  <div>
+                    <p style={{fontSize:13,fontWeight:600,color:G.text}}>{inc.description||inc.category}</p>
+                    <p style={{fontSize:11,color:G.textMuted}}>{inc.category} · {inc.date.slice(5).replace("-","/")}</p>
+                  </div>
+                  <p style={{fontSize:14,fontWeight:700,color:G.gold}}>+{fmt(inc.amount)}</p>
+                </div>
+              ))}
+            </Card>
+          )}
+
+          {/* Expenses */}
+          {cExp.length>0 && (
+            <Card style={{marginBottom:14}}>
+              <p style={{fontSize:13,fontWeight:700,color:G.text,marginBottom:14}}>Gastos</p>
+              {[...cExp].sort((a,b)=>new Date(b.date)-new Date(a.date)).map((e,i)=>{
+                const cat=expCats.find(c=>c.name===e.category)||{icon:"📦"};
+                return (
+                  <div key={e.id} style={{display:"flex",alignItems:"center",gap:10,
+                    paddingBottom:i<cExp.length-1?11:0,marginBottom:i<cExp.length-1?11:0,
+                    borderBottom:i<cExp.length-1?`1px solid ${G.border}`:"none"}}>
+                    <span style={{fontSize:18,flexShrink:0}}>{cat.icon}</span>
+                    <div style={{flex:1}}>
+                      <p style={{fontSize:13,fontWeight:600,color:G.text}}>{e.note||e.category}</p>
+                      <p style={{fontSize:11,color:G.textMuted}}>{e.category} · {e.date.slice(5).replace("-","/")}</p>
+                    </div>
+                    <p style={{fontSize:13,fontWeight:700,color:G.text}}>-{fmt(e.amount)}</p>
+                  </div>
+                );
+              })}
+            </Card>
+          )}
+
+          {cExp.length===0 && cInc.length===0 && (
+            <div style={{textAlign:"center",padding:"32px 0"}}>
+              <p style={{fontSize:42,marginBottom:12}}>📂</p>
+              <p style={{fontSize:15,color:G.textMuted}}>Sin movimientos en este ciclo</p>
+            </div>
+          )}
+        </>)}
+      </>)}
     </div>
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ── EXPORTAR / REPORTE ─────────────────────────────────────────────────────
-// ═══════════════════════════════════════════════════════════════════════════
-function ExportModal({ onClose, expenses, incomes, fixed, debts, expCats }) {
-  const keys = allMonthKeys(expenses, incomes);
-  const [selKey, setSelKey]   = useState(keys[0]);
+function ExportModal({ onClose, expenses, incomes, fixed, debts, expCats, targetCycle }) {
   const [loading, setLoading] = useState(false);
   const [done, setDone]       = useState(false);
 
-  const mExp = expenses.filter(e=>e.date.startsWith(selKey));
-  const mInc = incomes.filter(i=>i.date.startsWith(selKey));
+  const mExp = targetCycle ? expensesInCycle(expenses, targetCycle) : expenses;
+  const mInc = targetCycle ? incomesInCycle(incomes,  targetCycle) : incomes;
   const totalExp = mExp.reduce((s,e)=>s+e.amount,0);
   const totalInc = mInc.reduce((s,i)=>s+i.amount,0);
   const activeFixed = fixed.filter(f=>f.active);
   const totalFixed  = activeFixed.reduce((s,f)=>s+f.amount,0);
   const activeDebts = debts.filter(d=>d.paid<d.total);
+  const exportLabel = targetCycle ? cycleLabel(targetCycle) : "Todos";
+  const fileName2   = targetCycle
+    ? `Finza_Ciclo_${targetCycle.startDate}.xlsx`
+    : `Finza_Reporte_Completo.xlsx`;
 
   const byCat = {};
   mExp.forEach(e=>{ byCat[e.category]=(byCat[e.category]||0)+e.amount; });
@@ -1630,7 +1954,7 @@ function ExportModal({ onClose, expenses, incomes, fixed, debts, expCats }) {
 
     const XLSX  = window.XLSX;
     const wb    = XLSX.utils.book_new();
-    const label = keyToLabel(selKey);
+    const label = exportLabel;
 
     // Hoja 1: Resumen
     const ws1 = XLSX.utils.aoa_to_sheet([
@@ -1708,7 +2032,7 @@ function ExportModal({ onClose, expenses, incomes, fixed, debts, expCats }) {
     ws6["!cols"] = [{wch:24},{wch:14},{wch:14}];
     XLSX.utils.book_append_sheet(wb, ws6, "Estadísticas");
 
-    const fileName = `Reporte_${label.replace(" ","_")}_Finza.xlsx`;
+    const fileName = fileName2;
     const wbArray  = XLSX.write(wb, { bookType:"xlsx", type:"array" });
     const blob     = new Blob([wbArray], { type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
     return { blob, fileName };
@@ -1775,14 +2099,12 @@ function ExportModal({ onClose, expenses, incomes, fixed, debts, expCats }) {
           Genera un Excel completo con todos los movimientos del mes.
         </p>
 
-        {/* Month selector */}
-        <p style={{fontSize:11,color:G.textMuted,fontWeight:700,letterSpacing:1,marginBottom:8}}>MES A EXPORTAR</p>
-        <select value={selKey} onChange={e=>{ setSelKey(e.target.value); setDone(false); }}
-          style={{...inp, marginBottom:20}}>
-          {keys.map(k=>(
-            <option key={k} value={k}>{keyToLabel(k)}{k===nowKey()?" (actual)":""}</option>
-          ))}
-        </select>
+        {/* Cycle info */}
+        <div style={{background:G.goldLight,borderRadius:13,padding:"12px 14px",
+          marginBottom:20,border:`1px solid ${G.gold}33`}}>
+          <p style={{fontSize:11,color:G.textMuted,fontWeight:600,marginBottom:4}}>CICLO A EXPORTAR</p>
+          <p style={{fontSize:15,fontWeight:700,color:G.cream}}>{exportLabel}</p>
+        </div>
 
         {/* Preview stats */}
         <div style={{background:G.goldLight,borderRadius:16,padding:16,marginBottom:20,
@@ -1834,7 +2156,7 @@ function ExportModal({ onClose, expenses, incomes, fixed, debts, expCats }) {
             <p style={{fontSize:11,color:G.textMuted,marginBottom:20,
               background:G.surface,padding:"8px 14px",borderRadius:10,
               display:"inline-block"}}>
-              Reporte_{keyToLabel(selKey).replace(" ","_")}_Finza.xlsx
+              {fileName2}
             </p>
             <br/>
             <button onClick={()=>setDone(false)} style={{padding:"10px 24px",borderRadius:12,
@@ -1883,14 +2205,14 @@ const TABS = [
   { key:"home",     icon:"◈",  label:"Inicio"    },
   { key:"incomes",  icon:"↑",  label:"Ingresos"  },
   { key:"expenses", icon:"↓",  label:"Gastos"    },
-  { key:"debts",    icon:"⊘",  label:"Deudas"    },
+  { key:"fixed",    icon:"$",  label:"Fijos"     },
   { key:"more",     icon:"⋯",  label:"Más"       },
 ];
 const MORE_TABS = [
-  { key:"fixed",    icon:"📌", label:"Gastos fijos"  },
-  { key:"calendar", icon:"📅", label:"Calendario"    },
+  { key:"debts",    icon:"↩",  label:"Deudas"        },
   { key:"stats",    icon:"📊", label:"Estadísticas"  },
-  { key:"history",  icon:"🗂️", label:"Historial"     },
+  { key:"cycles",   icon:"🔄", label:"Ciclos"        },
+  { key:"calendar", icon:"📅", label:"Calendario"    },
 ];
 
 // ── APP ROOT ───────────────────────────────────────────────────────────────
@@ -1917,71 +2239,113 @@ function useLocalStorage(key, defaultValue) {
   return [value, setAndPersist];
 }
 
+
 export default function App() {
-  const [screen,   setScreen]   = useState("home");
-  // Datos persistidos en localStorage — sobreviven cierres de app
-  const [expenses, setExpenses] = useLocalStorage("finza_expenses", DEMO_EXPENSES);
-  const [incomes,  setIncomes]  = useLocalStorage("finza_incomes",  DEMO_INCOMES);
-  const [fixed,    setFixed]    = useLocalStorage("finza_fixed",    DEMO_FIXED);
-  const [debts,    setDebts]    = useLocalStorage("finza_debts",    DEMO_DEBTS);
+  const [expenses, setExpenses] = useLocalStorage("finza_expenses", []);
+  const [incomes,  setIncomes]  = useLocalStorage("finza_incomes",  []);
+  const [fixed,    setFixed]    = useLocalStorage("finza_fixed",    []);
+  const [debts,    setDebts]    = useLocalStorage("finza_debts",    []);
   const [expCats,  setExpCats]  = useLocalStorage("finza_expCats",  DEFAULT_EXP_CATS);
   const [incCats,  setIncCats]  = useLocalStorage("finza_incCats",  DEFAULT_INC_CATS);
-  const [showAdd,    setShowAdd]    = useState(false);
-  const [showReceipt,  setShowReceipt]  = useState(false);
-  const [showExport,   setShowExport]   = useState(false);
-  const [receiptPrefill, setReceiptPrefill] = useState(null);
-  const [notifs, setNotifs] = useState([]);
+  const [cycles,   setCycles]   = useLocalStorage("finza_cycles",   []);
 
+  const [screen,      setScreen]      = useState("home");
+  const [showAdd,     setShowAdd]     = useState(false);
+  const [showExport,  setShowExport]  = useState(false);
+  const [exportCycle, setExportCycle] = useState(null);
+  const [cyclePrompt, setCyclePrompt] = useState(null); // pending income
+  const [notifs,      setNotifs]      = useState([]);
+
+  // Auto-notifications
   useEffect(()=>{
-    const n=[], today=new Date();
+    const n=[], today=todayStr();
     debts.filter(d=>d.paid<d.total&&d.dueDate).forEach(d=>{
-      const days=Math.ceil((new Date(d.dueDate)-today)/86400000);
+      const days=Math.ceil((new Date(d.dueDate)-new Date())/86400000);
       if(days>=0&&days<=5) n.push({icon:"⚠️",message:`${d.name} vence en ${days===0?"hoy":days+"d"} — ${fmt(d.total-d.paid)} pendientes.`,type:"warning"});
     });
-    const mk=nowKey();
-    if(!incomes.some(i=>i.date.startsWith(mk)))
-      n.push({icon:"💰",message:"Aún no registras ingresos este mes.",type:"info"});
+    const active = getActiveCycle(cycles);
+    if(!active && incomes.length===0)
+      n.push({icon:"💡",message:"Registra tu primer ingreso para iniciar tu ciclo financiero.",type:"info"});
     setNotifs(n);
-  },[debts,incomes]);
+  },[debts,incomes,cycles]);
 
+  // ── Mutations ──────────────────────────────────────────────────────
   const addExp    = e  => setExpenses(p=>[e,...p]);
   const editExp   = e  => setExpenses(p=>p.map(x=>x.id===e.id?e:x));
   const delExp    = id => setExpenses(p=>p.filter(x=>x.id!==id));
-  const addInc    = i  => setIncomes(p=>[i,...p]);
+
+  const addInc = (inc) => {
+    setIncomes(p=>[inc,...p]);
+    // Ask to start cycle if it's a main income category
+    if (MAIN_INC_CATS.includes(inc.category)) {
+      setCyclePrompt(inc);
+    }
+  };
   const editInc   = i  => setIncomes(p=>p.map(x=>x.id===i.id?i:x));
   const delInc    = id => setIncomes(p=>p.filter(x=>x.id!==id));
+
   const addFix    = f  => setFixed(p=>[...p,f]);
   const editFix   = f  => setFixed(p=>p.map(x=>x.id===f.id?f:x));
   const delFix    = id => setFixed(p=>p.filter(x=>x.id!==id));
   const togFix    = id => setFixed(p=>p.map(x=>x.id===id?{...x,active:!x.active}:x));
+
   const addDebt   = d  => setDebts(p=>[...p,d]);
   const editDebt  = d  => setDebts(p=>p.map(x=>x.id===d.id?d:x));
   const delDebt   = id => setDebts(p=>p.filter(x=>x.id!==id));
   const payDebt   = (id,amt) => setDebts(p=>p.map(x=>x.id===id?{...x,paid:Math.min(x.paid+amt,x.total)}:x));
 
-  const handleReceiptResult = data => { setReceiptPrefill(data); setShowReceipt(false); setShowAdd(true); };
+  // Start new cycle from income
+  const startCycle = (income) => {
+    setCycles(prev => {
+      const updated = prev.map(c =>
+        !c.endDate
+          ? { ...c, endDate: getPrevDay(income.date) }
+          : c
+      );
+      const newCycle = {
+        id:        Date.now(),
+        startDate: income.date,
+        endDate:   null,
+        incomeId:  income.id,
+        label:     income.description || income.category,
+      };
+      return [...updated, newCycle];
+    });
+    setCyclePrompt(null);
+  };
 
-  // Which main tab is active (the "more" sub-screens count as "more" tab)
-  const moreScreens = ["fixed","calendar","stats"];
-  const activeTab = moreScreens.includes(screen) ? "more" : screen;
+  const getPrevDay = (dateStr) => {
+    const d = new Date(dateStr+"T12:00:00");
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().split("T")[0];
+  };
+
+  // ── Navigation ──────────────────────────────────────────────────────
+  const moreScreens = ["debts","stats","cycles","calendar"];
+  const activeTab   = moreScreens.includes(screen) ? "more" : screen;
 
   const goTab = (key) => {
     if (key === "more") {
-      // Cycle through more screens or go to first
       if (moreScreens.includes(screen)) {
         const idx = moreScreens.indexOf(screen);
         setScreen(moreScreens[(idx+1)%moreScreens.length]);
       } else {
-        setScreen("fixed");
+        setScreen("debts");
       }
     } else {
       setScreen(key);
     }
   };
 
+  const handleExportCycle = (cycle) => {
+    setExportCycle(cycle);
+    setShowExport(true);
+  };
+
   return (
     <div style={{minHeight:"100vh",background:"#111210",
-      fontFamily:"'DM Sans',system-ui,sans-serif",maxWidth:480,margin:"0 auto",position:"relative"}}>
+      fontFamily:"'DM Sans',system-ui,sans-serif",maxWidth:480,margin:"0 auto",position:"relative",
+      paddingTop:"env(safe-area-inset-top)"}}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800&display=swap');
         *{box-sizing:border-box;margin:0;padding:0;}
@@ -1990,36 +2354,38 @@ export default function App() {
         input,select{font-family:inherit;}
         input[type=number]::-webkit-outer-spin-button,
         input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+        html,body{background:#111210;padding-top:env(safe-area-inset-top);}
         @keyframes slideUp{from{transform:translateY(60px);opacity:0}to{transform:translateY(0);opacity:1}}
         @keyframes slideDown{from{transform:translateY(-8px);opacity:0}to{transform:translateY(0);opacity:1}}
         @keyframes pop{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:scale(1)}}
-        @keyframes fadeIn{from{opacity:0}to{opacity:1}}
       `}</style>
 
       {/* Screen content */}
-      <div style={{paddingTop:4}}>
+      <div style={{paddingTop: moreScreens.includes(screen) ? 68 : 4}}>
         {screen==="home"     && <HomeScreen expenses={expenses} incomes={incomes}
-          fixedExpenses={fixed} debts={debts} notifs={notifs}
+          fixedExpenses={fixed} debts={debts} cycles={cycles} notifs={notifs}
           onDismiss={i=>setNotifs(p=>p.filter((_,idx)=>idx!==i))}
-          onAddExpense={()=>{setReceiptPrefill(null);setShowAdd(true);}}
-          onUploadReceipt={()=>setShowReceipt(true)} expCats={expCats}/>}
+          onAddExpense={()=>setShowAdd(true)}
+          expCats={expCats} onGoScreen={setScreen}/>}
         {screen==="incomes"  && <IncomesScreen incomes={incomes} incCats={incCats}
           onAdd={addInc} onEdit={editInc} onDelete={delInc}
           onManageCats={setIncCats}/>}
         {screen==="expenses" && <ExpensesScreen expenses={expenses} expCats={expCats}
           onAdd={addExp} onEdit={editExp} onDelete={delExp}
           onManageCats={setExpCats}/>}
-        {screen==="debts"    && <DebtsScreen debts={debts}
-          onAdd={addDebt} onEdit={editDebt} onDelete={delDebt} onPayment={payDebt}/>}
         {screen==="fixed"    && <FixedScreen fixedExpenses={fixed}
           onAdd={addFix} onEdit={editFix} onDelete={delFix} onToggle={togFix}/>}
+        {screen==="debts"    && <DebtsScreen debts={debts}
+          onAdd={addDebt} onEdit={editDebt} onDelete={delDebt} onPayment={payDebt}/>}
+        {screen==="stats"    && <StatsScreen expenses={expenses} incomes={incomes}
+          expCats={expCats} cycles={cycles} fixed={fixed}/>}
+        {screen==="cycles"   && <CyclesScreen cycles={cycles} expenses={expenses}
+          incomes={incomes} fixed={fixed} debts={debts} expCats={expCats}
+          onExport={handleExportCycle}/>}
         {screen==="calendar" && <CalendarScreen expenses={expenses} expCats={expCats}/>}
-        {screen==="stats"    && <StatsScreen expenses={expenses} incomes={incomes} expCats={expCats}/>}
-        {screen==="history"  && <HistoryScreen expenses={expenses} incomes={incomes}
-          fixed={fixed} debts={debts} expCats={expCats}/>}
       </div>
 
-      {/* "More" sub-nav — only shown when in a more-screen */}
+      {/* More sub-nav */}
       {moreScreens.includes(screen) && (
         <div style={{
           position:"fixed",top:0,left:"50%",transform:"translateX(-50%)",
@@ -2057,52 +2423,43 @@ export default function App() {
             <button key={t.key} onClick={()=>goTab(t.key)} style={{
               display:"flex",flexDirection:"column",alignItems:"center",gap:3,
               background:"none",border:"none",cursor:"pointer",padding:"4px 2px",
-              transition:"opacity .15s",
             }}>
-              <span style={{
-                fontSize:20,fontWeight:700,
-                color:isActive?G.gold:G.textMuted,
-                transition:"color .2s",
-              }}>{t.icon}</span>
-              <span style={{fontSize:10,fontWeight:600,
-                color:isActive?G.gold:G.textMuted,transition:"color .2s"}}>{t.label}</span>
+              <span style={{fontSize:20,fontWeight:700,color:isActive?G.gold:G.textMuted,transition:"color .2s"}}>{t.icon}</span>
+              <span style={{fontSize:10,fontWeight:600,color:isActive?G.gold:G.textMuted,transition:"color .2s"}}>{t.label}</span>
               {isActive&&<div style={{width:18,height:2,borderRadius:99,background:G.gold}}/>}
             </button>
           );
         })}
       </div>
 
-      {/* FAB group */}
-      <div style={{position:"fixed",bottom:84,right:20,display:"flex",flexDirection:"column",gap:10,zIndex:501}}>
-        <button onClick={()=>setShowExport(true)} style={{
-          width:42,height:42,borderRadius:"50%",border:`1px solid ${G.gold}44`,
-          background:G.goldLight,color:G.gold,fontSize:18,cursor:"pointer",
-          boxShadow:`0 4px 16px rgba(0,0,0,.3)`,
-          display:"flex",alignItems:"center",justifyContent:"center",
-        }} title="Exportar reporte">⬇️</button>
-        <button onClick={()=>{setReceiptPrefill(null);setShowAdd(true);}} style={{
-          width:50,height:50,borderRadius:"50%",border:"none",
-          background:`linear-gradient(135deg,${G.gold},${G.goldSoft})`,
-          color:G.bg,fontSize:26,cursor:"pointer",
-          boxShadow:`0 6px 24px ${G.gold}44`,
-          display:"flex",alignItems:"center",justifyContent:"center",fontWeight:300,
-        }}>+</button>
-      </div>
+      {/* FAB */}
+      <button onClick={()=>setShowAdd(true)} style={{
+        position:"fixed",bottom:84,right:20,
+        width:50,height:50,borderRadius:"50%",border:"none",
+        background:`linear-gradient(135deg,${G.gold},${G.goldSoft})`,
+        color:G.bg,fontSize:26,cursor:"pointer",
+        boxShadow:`0 6px 24px ${G.gold}44`,
+        display:"flex",alignItems:"center",justifyContent:"center",fontWeight:300,
+        zIndex:501,
+      }}>+</button>
 
       {/* Modals */}
       {showAdd&&(
         <AddExpenseModal
-          onClose={()=>{setShowAdd(false);setReceiptPrefill(null);}}
-          onSave={addExp} prefill={receiptPrefill} expCats={expCats}/>
-      )}
-      {showReceipt&&(
-        <ReceiptModal onClose={()=>setShowReceipt(false)}
-          onResult={handleReceiptResult} expCats={expCats}/>
+          onClose={()=>setShowAdd(false)}
+          onSave={addExp} expCats={expCats}/>
       )}
       {showExport&&(
-        <ExportModal onClose={()=>setShowExport(false)}
+        <ExportModal onClose={()=>{setShowExport(false);setExportCycle(null);}}
           expenses={expenses} incomes={incomes}
-          fixed={fixed} debts={debts} expCats={expCats}/>
+          fixed={fixed} debts={debts} expCats={expCats}
+          targetCycle={exportCycle}/>
+      )}
+      {cyclePrompt&&(
+        <NewCyclePrompt
+          income={cyclePrompt}
+          onYes={()=>startCycle(cyclePrompt)}
+          onNo={()=>setCyclePrompt(null)}/>
       )}
     </div>
   );
